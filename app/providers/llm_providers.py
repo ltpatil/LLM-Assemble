@@ -1,6 +1,9 @@
 import os
 import sys
 import logging
+import asyncio
+from typing import List, Dict, Any, Optional
+
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
 
@@ -9,15 +12,18 @@ import anthropic
 import google.generativeai as genai
 import google.api_core.exceptions
 from groq import Groq, AsyncGroq
-from typing import List, Optional
+
 import config
 
+
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class LLMResponse:
+    """Standardized response object for all LLM providers."""
     def __init__(self, provider_name: str, text: str, model_name: str):
         self.provider_name = provider_name
-        self.text = text.strip()
+        self.text = text.strip() 
         self.model_name = model_name
 
     def to_dict(self):
@@ -29,6 +35,7 @@ class LLMResponse:
 
 class LLMProviders:
     def __init__(self):
+        
         self.openai_client = openai.OpenAI(api_key=config.OPENAI_API_KEY) if config.OPENAI_API_KEY else None
         self.anthropic_client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY) if config.ANTHROPIC_API_KEY else None
         self.groq_client = Groq(api_key=config.GROQ_API_KEY) if config.GROQ_API_KEY else None
@@ -39,9 +46,10 @@ class LLMProviders:
         else:
             self.google_model = None
         
-        logger.info("LLM providers initialized")
+        logger.info("LLM Providers Service Initialized.")
 
     def _format_prompt(self, user_prompt: str) -> str:
+        """Helper to enforce concise answers via prompt engineering."""
         return (
             f"Provide a direct, concise answer to the following question. "
             f"Use plain text only, no markdown formatting.\n\n"
@@ -49,8 +57,7 @@ class LLMProviders:
         )
 
     async def query_openai(self, prompt: str, model: str = config.OPENAI_MODEL) -> Optional[LLMResponse]:
-        if not self.openai_client:
-            return None
+        if not self.openai_client: return None
         try:
             chat_completion = await self.openai_client.chat.completions.create(
                 model=model,
@@ -62,12 +69,11 @@ class LLMProviders:
             )
             return LLMResponse("OpenAI", chat_completion.choices[0].message.content, model)
         except Exception as e:
-            logger.error(f"OpenAI error: {e}")
+            logger.error(f"OpenAI request failed: {e}")
             return None
 
     async def query_anthropic(self, prompt: str, model: str = config.ANTHROPIC_MODEL) -> Optional[LLMResponse]:
-        if not self.anthropic_client:
-            return None
+        if not self.anthropic_client: return None
         try:
             response = await self.anthropic_client.messages.create(
                 model=model,
@@ -76,12 +82,12 @@ class LLMProviders:
             )
             return LLMResponse("Anthropic", response.content[0].text, model)
         except Exception as e:
-            logger.error(f"Anthropic error: {e}")
+            logger.error(f"Anthropic request failed: {e}")
             return None
 
     async def query_google_gemini(self, prompt: str, model: str = config.GOOGLE_MODEL) -> Optional[LLMResponse]:
-        if not self.google_model:
-            return None
+        if not self.google_model: return None
+        
         
         safety_settings = [
             {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
@@ -98,18 +104,21 @@ class LLMProviders:
             )
 
             if not response.candidates:
-                logger.warning(f"Google Gemini blocked: {response.prompt_feedback}")
+                logger.warning(f"Google Gemini blocked response. Feedback: {response.prompt_feedback}")
                 return None
             
             return LLMResponse("Google Gemini", response.text.strip(), model)
             
         except Exception as e:
-            logger.error(f"Google Gemini error: {e}")
+            logger.error(f"Google Gemini request failed: {e}")
             return None
 
-    async def query_groq(self, prompt: str, model: str = config.GROQ_MODEL) -> Optional[LLMResponse]:
-        if not self.groq_client:
-            return None
+    async def query_groq(self, prompt: str, model: str, provider_label: str) -> Optional[LLMResponse]:
+        """
+        Queries Groq API. Accepts provider_label to distinguish Llama 3 from GPT-OSS.
+        """
+        if not self.groq_client: return None
+        
         
         async_client = AsyncGroq(api_key=config.GROQ_API_KEY)
 
@@ -122,27 +131,41 @@ class LLMProviders:
                 model=model,
                 temperature=0.3,
             )
-            return LLMResponse("Groq (Llama 3)", chat_completion.choices[0].message.content, model)
+            return LLMResponse(provider_label, chat_completion.choices[0].message.content, model)
         except Exception as e:
-            logger.error(f"Groq error: {e}")
+            logger.error(f"Groq ({model}) request failed: {e}")
             return None
 
     async def get_all_llm_responses(self, prompt: str) -> List[LLMResponse]:
-        import asyncio
-        
+        """Fan-out: Queries all configured providers in parallel."""
         tasks = []
+        
+      
+        if self.google_model:
+            tasks.append(self.query_google_gemini(prompt))
+            
+      
+        if self.groq_client:
+            
+            model_llama = getattr(config, 'GROQ_MODEL_LLAMA', "llama-3.3-70b-versatile")
+            tasks.append(self.query_groq(prompt, model=model_llama, provider_label="Groq (Llama 3)"))
+            
+        
+        if self.groq_client:
+            model_openai = getattr(config, 'GROQ_MODEL_OPENAI', "openai/gpt-oss-120b")
+            tasks.append(self.query_groq(prompt, model=model_openai, provider_label="Groq (GPT-OSS)"))
+
+        
         if self.openai_client:
             tasks.append(self.query_openai(prompt))
         if self.anthropic_client:
             tasks.append(self.query_anthropic(prompt))
-        if self.google_model:
-            tasks.append(self.query_google_gemini(prompt))
-        if self.groq_client:
-            tasks.append(self.query_groq(prompt))
         
-        logger.info(f"Querying {len(tasks)} LLM providers")
+        logger.info(f"Dispatching {len(tasks)} LLM queries...")
         responses = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        
         valid_responses = [resp for resp in responses if isinstance(resp, LLMResponse)]
-        logger.info(f"Received {len(valid_responses)} valid responses")
+        logger.info(f"Successfully received {len(valid_responses)} valid responses.")
         
         return valid_responses

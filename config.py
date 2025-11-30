@@ -20,7 +20,8 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 OPENAI_MODEL = "gpt-4-turbo"
 ANTHROPIC_MODEL = "claude-3-opus-20240229"
 GOOGLE_MODEL = "gemini-2.5-flash"
-GROQ_MODEL = "llama-3.3-70b-versatile"
+GROQ_MODEL_LLAMA = "llama-3.3-70b-versatile"
+GROQ_MODEL_OPENAI = "openai/gpt-oss-120b"
 
 # Embedding Configuration
 EMBEDDING_MODEL_NAME = 'all-MiniLM-L6-v2'

@@ -11,7 +11,8 @@ import {
 } from '@chakra-ui/react'
 import { SearchIcon, TimeIcon, DeleteIcon } from '@chakra-ui/icons'
 
-const API_URL = "http://127.0.0.1:8000/api"
+const BASE_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000"
+const API_URL = `${BASE_URL}/api`
 const API_TOKEN = import.meta.env.VITE_API_TOKEN || ""
 
 function App() {
